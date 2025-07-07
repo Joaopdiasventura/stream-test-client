@@ -1,0 +1,20 @@
+@if (isLoading) {
+<loading />
+} @else {
+<div class="container">
+  <div class="file-upload">
+    <input type="file" (change)="onFileChange($event)" />
+  </div>
+
+  @if (uploadVisible) {
+  <div class="progress-container">
+    <progress [value]="uploadProgress" max="100"></progress>
+    <span>{{ uploadProgress }}%</span>
+  </div>
+  }
+
+  <button class="btn btn-primary" (click)="downloadFile()">Download</button>
+
+  <button class="btn btn-secondary" (click)="reset()">Reiniciar</button>
+</div>
+}
