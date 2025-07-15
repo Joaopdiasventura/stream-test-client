@@ -1,5 +1,5 @@
 export interface CreateBeneficiaryDto {
   name: string;
-  age: string;
+  age: number;
   cpf: string;
 }

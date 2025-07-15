@@ -1,27 +1,32 @@
 /// <reference lib="webworker" />
+import { io } from 'socket.io-client';
+import { CreateBeneficiaryDto } from '../../shared/dtos/beneficiary/create-beneficiary.dto';
+
 declare const API_URL: string;
 
 self.onmessage = async (e) => {
   const file: File = e.data;
   const totalLines = await countFileLines(file);
-  const batchSize = Math.floor(totalLines / 1000);
+  const batchSize = Math.min(Math.ceil(totalLines / 1000), 1000);
 
   let processed = 0;
-  let batch: { name: string; age: number; cpf: string }[] = [];
+  let batch: CreateBeneficiaryDto[] = [];
 
-  const sendBatch = async () => {
-    if (!batch.length) return;
-    const res = await fetch(`${API_URL}/beneficiary`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(batch),
+  const socket = io(API_URL, { transports: ['websocket'] });
+  await new Promise<void>((r) => socket.on('connect', () => r()));
+
+  const sendBatch = () =>
+    new Promise<void>((resolve) => {
+      socket.emit('beneficiary:create', batch, (res: number) => {
+        processed += res;
+        postMessage({
+          type: 'progress',
+          value: Math.round((processed / totalLines) * 1000) / 10,
+        });
+        batch = [];
+        resolve();
+      });
     });
-    if (!res.ok) console.error('Erro no batch:', res.status);
-    processed += batch.length;
-    const pct = Math.round((processed / totalLines) * 1000) / 10;
-    postMessage({ type: 'progress', value: pct });
-    batch = [];
-  };
 
   await file
     .stream()
@@ -29,21 +34,16 @@ self.onmessage = async (e) => {
     .pipeTo(
       new WritableStream<string>({
         async write(line) {
-          const [name, ageStr, cpf] = line.split('###');
-          const age = Number(ageStr);
-          if (name && cpf && !isNaN(age)) {
-            batch.push({ name, age, cpf });
-            if (batch.length >= batchSize) {
-              await sendBatch();
-            }
-          }
+          const [name, age, cpf] = line.split('###');
+          batch.push({ name, age: parseInt(age), cpf });
+          if (batch.length >= batchSize) await sendBatch();
         },
-        close: async () => {
+        async close() {
           await sendBatch();
+          socket.disconnect();
           postMessage({ type: 'done' });
           self.close();
         },
-        abort: (err) => console.error('Stream abortado', err),
       })
     );
 };
@@ -69,11 +69,9 @@ function parseLines() {
   return new TransformStream<Uint8Array, string>({
     transform(chunk, controller) {
       buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop()!;
-      for (const line of lines) {
-        if (line.trim()) controller.enqueue(line);
-      }
+      const parts = buffer.split('\n');
+      buffer = parts.pop()!;
+      for (const line of parts) if (line.trim()) controller.enqueue(line);
     },
     flush(controller) {
       if (buffer.trim()) controller.enqueue(buffer);
